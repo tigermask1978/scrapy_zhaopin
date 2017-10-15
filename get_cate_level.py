@@ -4,8 +4,6 @@
 import sys
 import requests
 from bs4 import BeautifulSoup
-import re
-import string
 import pymongo
 
 reload(sys)
@@ -25,38 +23,10 @@ client = pymongo.MongoClient('localhost', 27017)
 DB_ZhaoPin = client['zhaopin']
 FirstLevel_Table = DB_ZhaoPin['FirstLevel']
 SecondLevel_Table = DB_ZhaoPin['SecondLevel']
+Detail_Table = DB_ZhaoPin['DetailUrls']
+ItemInfo_Table = DB_ZhaoPin['ItemInfos']
 
 url_prfex = 'http://sou.zhaopin.com'
-
-escape_dict={'\a':r'\a',
-          '\b':r'\b',
-         '\c':r'\c',
-         '\f':r'\f',
-         '\n':r'\n',
-         '\r':r'\r',
-         '\t':r'\t',
-         '\v':r'\v',
-         '\'':r'\'',
-         '\"':r'\"',
-         '\0':r'\0',
-         '\1':r'\1',
-         '\2':r'\2',
-         '\3':r'\3',
-         '\4':r'\4',
-         '\5':r'\5',
-         '\6':r'\6',
-         '\7':r'\7',
-         '\8':r'\8',
-         '\9':r'\9'}
-
-def raw(text):  #将每个可能的转义字符都进行了替换
-    """Returnsa raw string representation of text"""
-    new_string=''
-    for char in text:
-       try:
-           new_string += escape_dict[char]
-       except KeyError:new_string+=char
-    return new_string
 
 def get_first_level_cate(url):
     counter = 0
@@ -75,16 +45,17 @@ def get_first_level_cate(url):
                     }
                     FirstLevel_Table.insert_one(data)
                     counter += 1
-            print('共生成' + str(counter) + '条记录')
+            print('共抓取' + str(counter) + '条一级条目')
         else:
             print('获取网页数据失败===>:' + str(wb_data.status_code))
     except:
         raise
     # return first_level
 
-
+#抓取所有一级和二级目录，存入数据库中
 def get_all_levels(url):
     first_level_counter = 0
+    second_level_total_count = 0
     try:
         wb_data = requests.get(url, headers=headers)
         if wb_data.status_code == requests.codes.ok:
@@ -105,20 +76,113 @@ def get_all_levels(url):
                         item_str = item.get('href')
                         if item_str.find(href_str) >= 0 and item_str.count('&', 0, len(item_str)) == 2:
                             data = {
-                                'name': item.get_text(),
+                                'firstLevelName': href.get_text(),
+                                'secondLevelName': item.get_text(),
                                 'href': url_prfex + item_str
                             }
                             SecondLevel_Table.insert_one(data)
                             second_level_counter += 1
+                            second_level_total_count += 1
                             print('======>生成二级条目:' + item.get_text())
                     print('======>生成' + str(second_level_counter) + '条二级条目')
-            print('共生成' + str(first_level_counter) + '条一级条目')
+            print('共生成' + str(first_level_counter) + '条一级条目.' + '生成' + str(second_level_total_count) + '条二级条目.')
         else:
             print('获取网页数据失败===>:' + str(wb_data.status_code))
     except:
         raise
 
 
-if __name__ =='__main__':
-    main_page_url = 'http://sou.zhaopin.com/'
-    get_all_levels(main_page_url)
+#某一页是否有下一页
+def has_next_page(url, headers):
+    try:
+        wb_data = requests.get(url, headers=headers)
+        if wb_data.status_code == requests.codes.ok:
+            soup = BeautifulSoup(wb_data.text, 'lxml')
+            next_button = soup.select('li.pagesDown-pos > a[href]')
+            if len(next_button) > 0:
+                return next_button[0].get('href')
+            else:
+                return None
+        else:
+            print('获取网页数据失败,返回码：' + str(wb_data.status_code))
+            return None
+    except:
+        raise
+        return None
+
+
+#通过一个合法url，抓取条目列表url，存入数据库
+def get_detail_url_list_from(url, firstLevelName, secondLevelName, headers):
+    try:
+        wb_data = requests.get(url, headers=headers)
+        if wb_data.status_code == requests.codes.ok:
+            soup = BeautifulSoup(wb_data.text, 'lxml')
+            hrefs = soup.select('table.newlist td.zwmc > div > a:nth-of-type(1)')
+            for href in hrefs:
+                data = {
+                    'firstLevelName': firstLevelName,
+                    'secondLevelName': secondLevelName,
+                    'name': href.get_text(),
+                    'href': href.get('href')
+                }
+                Detail_Table.insert_one(data)
+            return len(hrefs)
+        else:
+            print('获取网页数据失败,返回码：' + str(wb_data.status_code))
+            return None
+    except:
+        raise
+
+
+
+#抓取某二级Url下的所有条目连接url
+def get_all_detail_url_from(secondLevelUrl,firstLevelName, secondLevelName, headers):
+    pageNum = 1
+    totalRecs = 0
+    print('获取第' + str(pageNum) + '页数据...')
+    totalRecs += get_detail_url_list_from(secondLevelUrl,firstLevelName, secondLevelName, headers)
+    print('完成!')
+    next_page_url = has_next_page(secondLevelUrl,headers)
+
+
+    while next_page_url:
+        pageNum += 1
+        print('获取第' + str(pageNum) + '页数据...')
+        totalRecs += get_detail_url_list_from(next_page_url,firstLevelName, secondLevelName, headers)
+        print('完成!')
+        next_page_url = has_next_page(next_page_url, headers)
+
+    print('共抓取' + str(totalRecs) + '条数据！')
+
+
+#通过DetailUrls数据表中的url抓取条目明细,存入数据库中
+def get_all_item_info_from(headers):
+    for item in Detail_Table.find().limit(100):
+        name = item['name']
+        firstLevelName = item['firstLevelName']
+        secondLevelName = item['secondLevelName']
+        href = item['href']
+        # print(item['name'], item['href'], item['firstLevelName'], item['secondLevelName'])
+        try:
+            wb_data = requests.get(href, headers=headers)
+            if wb_data.status_code == requests.codes.ok:
+                pass
+            else:
+                print('获取网络数据失败, 返回码:' + str(wb_data.status_code))
+        except:
+            raise
+
+
+
+if __name__ == '__main__':
+    # main_page_url = 'http://sou.zhaopin.com/'
+    # get_all_levels(main_page_url)
+
+    #pass
+
+    # url = 'http://sou.zhaopin.com/jobs/searchresult.ashx?jl=530&bj=7002000&sj=464'
+    # print(has_next_page(url, headers))
+    #get_detail_url_list_from(url,'销售行政/商务','其他',headers)
+    # get_all_detail_url_from(url, '销售行政/商务','其他',headers)
+
+    get_all_item_info_from(headers)
