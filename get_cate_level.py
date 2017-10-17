@@ -25,6 +25,7 @@ FirstLevel_Table = DB_ZhaoPin['FirstLevel']
 SecondLevel_Table = DB_ZhaoPin['SecondLevel']
 Detail_Table = DB_ZhaoPin['DetailUrls']
 ItemInfo_Table = DB_ZhaoPin['ItemInfos']
+SecondLevel_Table_tmp = DB_ZhaoPin['SecondLevel_tmp']
 
 url_prfex = 'http://sou.zhaopin.com'
 
@@ -95,7 +96,9 @@ def get_all_levels(url):
 #某一页是否有下一页
 def has_next_page(url, headers):
     try:
-        wb_data = requests.get(url, headers=headers)
+        s = requests.session()
+        s.keep_alive = False
+        wb_data = s.get(url, headers=headers)
         if wb_data.status_code == requests.codes.ok:
             soup = BeautifulSoup(wb_data.text, 'lxml')
             next_button = soup.select('li.pagesDown-pos > a[href]')
@@ -114,7 +117,9 @@ def has_next_page(url, headers):
 #通过一个合法url，抓取条目列表url，存入数据库
 def get_detail_url_list_from(url, firstLevelName, secondLevelName, headers):
     try:
-        wb_data = requests.get(url, headers=headers)
+        s = requests.session()
+        s.keep_alive = False
+        wb_data = s.get(url, headers=headers)
         if wb_data.status_code == requests.codes.ok:
             soup = BeautifulSoup(wb_data.text, 'lxml')
             hrefs = soup.select('table.newlist td.zwmc > div > a:nth-of-type(1)')
@@ -154,6 +159,34 @@ def get_all_detail_url_from(secondLevelUrl,firstLevelName, secondLevelName, head
 
     print('共抓取' + str(totalRecs) + '条数据！')
 
+#通过遍历二级条目表，获取所有明细url，存入数据库DetailUrls中
+def get_all_item_url(headers):
+    loaded_url = []
+    for i in list(SecondLevel_Table_tmp.find({}, {'_id': 0})):
+        loaded_url.append(i['href'])
+    for item in SecondLevel_Table.find():
+        firstLevelName = item['firstLevelName']
+        secondLevelName = item['secondLevelName']
+        href = item['href']
+        if href in loaded_url > 0:
+            continue
+        else:
+            #为防止由于上次抓取异常存在的冗余数据，先做一次删除
+            Detail_Table.remove({'firstLevelName': firstLevelName, 'secondLevelName': secondLevelName})
+            try:
+                print('正在抓取:==>' + firstLevelName + '<==  ==>' + secondLevelName + '<==的数据...')
+                get_all_detail_url_from(href, firstLevelName=firstLevelName, secondLevelName=secondLevelName, headers=headers)
+                data = {
+                    'href': href
+                }
+                SecondLevel_Table_tmp.insert_one(data)
+                loaded_url.append(href)
+                print('完成抓取:==>' + firstLevelName + '<==  ==>' + secondLevelName + '<==的数据...')
+            except:
+                raise
+
+
+
 
 #通过DetailUrls数据表中的url抓取条目明细,存入数据库中
 def get_all_item_info_from(headers):
@@ -164,7 +197,9 @@ def get_all_item_info_from(headers):
         href = item['href']
         # print(item['name'], item['href'], item['firstLevelName'], item['secondLevelName'])
         try:
-            wb_data = requests.get(href, headers=headers)
+            s = requests.session()
+            s.keep_alive = False
+            wb_data = s.get(href, headers=headers)
             if wb_data.status_code == requests.codes.ok:
                 pass
             else:
@@ -174,15 +209,91 @@ def get_all_item_info_from(headers):
 
 
 
+'''计算量统计部分'''
+#获得某Url下的所有条目数
+def get_count_of(url, headers):
+    try:
+        wb_data = requests.get(url, headers=headers)
+        if wb_data.status_code == requests.codes.ok:
+            soup = BeautifulSoup(wb_data.text, 'lxml')
+            hrefs = soup.select('table.newlist td.zwmc > div > a:nth-of-type(1)')
+            return len(hrefs)
+        else:
+            print('获取网页数据失败,返回码：' + str(wb_data.status_code))
+            return None
+    except:
+        raise
+
+# 抓取某二级Url下的所有条目数
+def get_all_count_from(secondLevelUrl, headers):
+    pageNum = 1
+    totalRecs = 0
+    # print('获取第' + str(pageNum) + '页数据...')
+    totalRecs += get_count_of(secondLevelUrl,  headers)
+    # print('完成!')
+    next_page_url = has_next_page(secondLevelUrl, headers)
+
+    while next_page_url:
+        pageNum += 1
+        # print('获取第' + str(pageNum) + '页数据...')
+        totalRecs += get_count_of(next_page_url, headers)
+        # print('完成!')
+        next_page_url = has_next_page(next_page_url, headers)
+
+    return totalRecs
+
+
+#计算某一级条目数据量
+def cal_total_count_from(firstLevelName, headers):
+    if FirstLevel_Table.find({'name': firstLevelName}).count() > 0:
+        total_count = 0
+        print('正在获取一级条目：' + firstLevelName + '的数据量...')
+        for item in SecondLevel_Table.find({"firstLevelName": firstLevelName}):
+            secondLevelName = item['secondLevelName']
+            secondUrl = item['href']
+            print('=====> 获取二级条目：<<<' + secondLevelName + '>>>条目数...')
+            current_count = get_all_count_from(secondUrl, headers)
+            total_count = current_count + total_count
+            print('=====> 获取二级条目成功：' + str(current_count) + '条.' )
+        print('获取一级条目成功：' + str(total_count) + '条.' )
+        return total_count
+    else:
+        print('没有此一级条目：' + firstLevelName)
+
+#计算总数据量
+def cal_total_count(headers):
+    total_count = 0
+    for item in SecondLevel_Table.find():
+        firstLevelName = item['firstLevelName']
+        secondLevelName = item['secondLevelName']
+        secondUrl = item['href']
+        print('一级条目：' + firstLevelName + '==> 二级条目：' + secondLevelName + '条目数...')
+        current_count = get_all_count_from(secondUrl, headers)
+        total_count = current_count + total_count
+        print('当前条目数：' + str(current_count) + '当前所有条目数:' + str(total_count))
+
+
+    return total_count
+
 if __name__ == '__main__':
     # main_page_url = 'http://sou.zhaopin.com/'
     # get_all_levels(main_page_url)
 
-    #pass
+    # pass
 
     # url = 'http://sou.zhaopin.com/jobs/searchresult.ashx?jl=530&bj=7002000&sj=464'
     # print(has_next_page(url, headers))
     #get_detail_url_list_from(url,'销售行政/商务','其他',headers)
     # get_all_detail_url_from(url, '销售行政/商务','其他',headers)
 
-    get_all_item_info_from(headers)
+
+
+    #计算所有条目数
+    #print('所有计算量：' + str(cal_total_count(headers)))
+    #计算一级条目数
+    # cal_total_count_from('销售业务', heade
+
+    # get_all_item_url(headers)
+
+    print Detail_Table.count()
+
