@@ -5,6 +5,8 @@ import sys
 import requests
 from bs4 import BeautifulSoup
 import pymongo
+import re
+import string
 
 reload(sys)
 sys.setdefaultencoding('utf8')
@@ -19,6 +21,15 @@ headers = {
     'Accept-Language': 'zh-CN,zh;q=0.8',
 }
 
+jobs_headers = {
+        'Host': 'jobs.zhaopin.com',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36',
+        'Upgrade-Insecure-Requests': '1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Encoding': 'gzip, deflate',
+        'Accept-Language': 'zh-CN,zh;q=0.8',
+    }
+
 client = pymongo.MongoClient('localhost', 27017)
 DB_ZhaoPin = client['zhaopin']
 FirstLevel_Table = DB_ZhaoPin['FirstLevel']
@@ -26,6 +37,7 @@ SecondLevel_Table = DB_ZhaoPin['SecondLevel']
 Detail_Table = DB_ZhaoPin['DetailUrls']
 ItemInfo_Table = DB_ZhaoPin['ItemInfos']
 SecondLevel_Table_tmp = DB_ZhaoPin['SecondLevel_tmp']
+Detail_Table_tmp = DB_ZhaoPin['DetailUrls_tmp']
 
 url_prfex = 'http://sou.zhaopin.com'
 
@@ -186,26 +198,144 @@ def get_all_item_url(headers):
                 raise
 
 
+#通过url抓取一条明细
+def get_one_item_info_from(url, firstLevelName, secondLevelName, headers):
+    try:
+        s = requests.session()
+        s.keep_alive = False
+        wb_data = s.get(url, headers=headers)
+        if wb_data.status_code == requests.codes.ok:
+            soup = BeautifulSoup(wb_data.text, 'lxml')
+            position_name = soup.select('div.fl > h1')[0].get_text()
+            month_salarys = soup.select('div.terminalpage-left > ul.terminal-ul.clearfix > li:nth-of-type(1) > strong')
+            if month_salarys:
+                month_salary = month_salarys[0].get_text()
+                pattern = r'([0-9]+)-([0-9]+)'
+                # g = re.findall(pattern, month_salary)
+                g = re.match(pattern, month_salary)
+                if g:
+                    month_salary = [g.group(1), g.group(2)]
+                else:
+                    month_salary = '未知薪水'
+            else:
+                month_salary = '未发现薪水'
+            pub_dates = soup.select('#span4freshdate')
+            pub_date = pub_dates[0].get_text() if pub_dates else '未知日期'
+            work_experiences = soup.select('div.terminalpage-left > ul.terminal-ul.clearfix > li:nth-of-type(5) > strong')
+            if work_experiences:
+                work_experience = work_experiences[0].get_text()
+                pattern = r'([0-9]+)-([0-9]+)'
+                # g = re.findall(pattern, month_salary)
+                g = re.match(pattern, work_experience)
+                if g:
+                    work_experience = [g.group(1), g.group(2)]
+                else:
+                    work_experience = '未知工作经验'
+            else:
+                work_experience = '未发现工作经验'
+            recruit_nums = soup.select('div.terminalpage-left > ul.terminal-ul.clearfix > li:nth-of-type(7) > strong')
+            if recruit_nums:
+                recruit_num = recruit_nums[0].get_text()
+                pattern = r'([0-9]+)'
+                # g = re.findall(pattern, month_salary)招聘人数
+                g = re.match(pattern, recruit_num)
+                if g:
+                    recruit_num = g.group(1)
+                else:
+                    recruit_num = '未知招聘人数'
+            else:
+                recruit_num = '未发现招聘人数'
 
+            work_places = soup.select('div.terminalpage-left > ul.terminal-ul.clearfix > li:nth-of-type(2) > strong')
+            work_place = work_places[0].get_text() if work_places else '未知工作地点'
+
+            full_part_times = soup.select('div.terminalpage-left > ul.terminal-ul.clearfix > li:nth-of-type(4) > strong')
+            full_part_time = full_part_times[0].get_text() if full_part_times else '未知工作性质'
+
+            minimum_educations = soup.select('body > div.terminalpage.clearfix > div.terminalpage-left > ul > li:nth-of-type(6) > strong')
+            minimum_education = minimum_educations[0].get_text() if minimum_educations else '未知最低学历'
+
+            work_types = soup.select('div.terminalpage-left > ul.terminal-ul.clearfix > li:nth-of-type(8) > strong')
+            work_type = work_types[0].get_text() if work_types else '未知工作类别'
+
+            company_names = soup.select('body > div.terminalpage.clearfix > div.terminalpage-right > div.company-box > p.company-name-t > a')
+            company_name = company_names[0].get_text() if company_names else '未知公司名称'
+
+            company_scales = soup.select('body > div.terminalpage.clearfix > div.terminalpage-right > div.company-box > ul > li:nth-of-type(1) > strong')
+            if company_scales:
+                company_scale = company_scales[0].get_text()
+                pattern = r'([0-9]+)-([0-9]+)'
+                # g = re.findall(pattern, month_salary)招聘人数
+                g = re.match(pattern, company_scale)
+                if g:
+                    company_scale = [g.group(1), g.group(2)]
+                else:
+                    company_scale = '未知公司规模'
+            else:
+                company_scale = '未发现公司规模'
+
+            company_propertys = soup.select('body > div.terminalpage.clearfix > div.terminalpage-right > div.company-box > ul > li:nth-of-type(2) > strong')
+            company_property = company_propertys[0].get_text() if company_propertys else '未知公司性质'
+
+            company_industrys = soup.select('body > div.terminalpage.clearfix > div.terminalpage-right > div.company-box > ul > li:nth-of-type(3) > strong > a')
+            company_industry = company_industrys[0].get_text() if company_industrys else '未知公司行业'
+
+            company_addresses = soup.select('body > div.terminalpage.clearfix > div.terminalpage-right > div.company-box > ul > li:nth-of-type(4) > strong')
+            company_address = company_addresses[0].get_text() if company_addresses else '未知公司地址'
+            company_address = string.strip(company_address[0: company_address.find(r'查')])
+
+            data = {
+                'firstLevelName': firstLevelName,
+                'secondLevelName': secondLevelName,
+                'position_name': position_name,
+                'month_salary': month_salary,
+                'pub_date': pub_date,
+                'work_experience': work_experience,
+                'recruit_num': recruit_num,
+                'work_place': work_place,
+                'full_part_time': full_part_time,
+                'work_type': work_type,
+                'company_name': company_name,
+                'company_scale': company_scale,
+                'company_property': company_property,
+                'company_industry': company_industry,
+                'company_address': company_address,
+                'minimum_education': minimum_education
+            }
+            # print data
+            ItemInfo_Table.insert_one(data)
+        else:
+            print('获取网页数据失败,返回码：' + str(wb_data.status_code))
+            return None
+    except:
+        raise
 
 #通过DetailUrls数据表中的url抓取条目明细,存入数据库中
-def get_all_item_info_from(headers):
-    for item in Detail_Table.find().limit(100):
-        name = item['name']
+def get_all_item_info(headers):
+    loaded_url = []
+    for i in list(Detail_Table_tmp.find({}, {'_id': 0})):
+        loaded_url.append(i['href'])
+    for item in Detail_Table.find():
         firstLevelName = item['firstLevelName']
         secondLevelName = item['secondLevelName']
+        name = item['name']
         href = item['href']
-        # print(item['name'], item['href'], item['firstLevelName'], item['secondLevelName'])
-        try:
-            s = requests.session()
-            s.keep_alive = False
-            wb_data = s.get(href, headers=headers)
-            if wb_data.status_code == requests.codes.ok:
-                pass
-            else:
-                print('获取网络数据失败, 返回码:' + str(wb_data.status_code))
-        except:
-            raise
+        if href in loaded_url > 0:
+            continue
+        else:
+            # 为防止由于上次抓取异常存在的冗余数据，先做一次删除
+            Detail_Table.remove({'href': href})
+            try:
+                print('正在抓取:==>' + href + '<==的数据........')
+                get_one_item_info_from(href, firstLevelName, secondLevelName, headers=headers)
+                data = {
+                    'href': href
+                }
+                Detail_Table_tmp.insert_one(data)
+                loaded_url.append(href)
+                print('完成。')
+            except:
+                raise
 
 
 
@@ -295,5 +425,13 @@ if __name__ == '__main__':
 
     # get_all_item_url(headers)
 
-    print Detail_Table.count()
+    #print Detail_Table.count()
 
+
+
+    # url = 'http://jobs.zhaopin.com/593598527250540.htm'
+    # get_one_item_info_from(url,'销售', '销售代表', headers=jobs_headers)
+
+    get_all_item_info(jobs_headers)
+    # print('one two')
+    # print '\x1b[2Cthree\x1b[0m'
