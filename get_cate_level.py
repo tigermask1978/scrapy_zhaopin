@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 import pymongo
 import re
 import string
+import time
 
 reload(sys)
 sys.setdefaultencoding('utf8')
@@ -312,6 +313,8 @@ def get_one_item_info_from(url, firstLevelName, secondLevelName, headers):
 
 #通过DetailUrls数据表中的url抓取条目明细,存入数据库中
 def get_all_item_info(headers):
+    total_item_info_count = 601041
+    loaded_count = Detail_Table_tmp.find().count()
     loaded_url = []
     for i in list(Detail_Table_tmp.find({}, {'_id': 0})):
         loaded_url.append(i['href'])
@@ -327,13 +330,30 @@ def get_all_item_info(headers):
             Detail_Table.remove({'href': href})
             try:
                 print('正在抓取:==>' + href + '<==的数据........')
-                get_one_item_info_from(href, firstLevelName, secondLevelName, headers=headers)
+
+                # 每次数据抓取尝试5次
+                retry = 0
+                while retry < 5:
+                    try:
+                        get_one_item_info_from(href, firstLevelName, secondLevelName, headers=headers)
+                        break
+                    except:
+                        retry += 1
+                        time.sleep(2)
+                        continue
+                else:
+                    print('\033[1;31;40m获取数据' + href + '失败!\033[0m ')
+                    continue
+
+
                 data = {
                     'href': href
                 }
                 Detail_Table_tmp.insert_one(data)
                 loaded_url.append(href)
-                print('完成。')
+                print('\033[1;32;40m完成。\033[0m ')
+                loaded_count += 1
+                print('{loaded}/{total}'.format(loaded=loaded_count, total=total_item_info_count))
             except:
                 raise
 
@@ -405,7 +425,31 @@ def cal_total_count(headers):
 
     return total_count
 
+
+#迭代器示例
+def rev_str(my_str):
+    length = len(my_str)
+    for i in range(length - 1,-1,-1):
+        yield my_str[i]
+
+def PowTwoGen(max = 0):
+    n = 0
+    while n < max:
+        yield 2 ** n
+        n += 1
+
+
+def all_even():
+    n = 0
+    while True:
+        yield n
+        n += 2
+
 if __name__ == '__main__':
+
+    # for i in all_even():
+    #     print i
+
     # main_page_url = 'http://sou.zhaopin.com/'
     # get_all_levels(main_page_url)
 
@@ -433,5 +477,6 @@ if __name__ == '__main__':
     # get_one_item_info_from(url,'销售', '销售代表', headers=jobs_headers)
 
     get_all_item_info(jobs_headers)
-    # print('one two')
-    # print '\x1b[2Cthree\x1b[0m'
+    # print Detail_Table.find().count()  #601041
+    # print Detail_Table_tmp.find().count()
+
